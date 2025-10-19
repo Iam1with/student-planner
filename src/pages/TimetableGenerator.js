@@ -16,13 +16,53 @@ const TimetableGenerator = () => {
   const [selectedTime, setSelectedTime] = useState('17:00');
   const [fixedSchedule, setFixedSchedule] = useState(() => JSON.parse(localStorage.getItem('fixedSchedule')) || []);
 
+  // ✅ Request notification permission once
+  useEffect(() => {
+    if ("Notification" in window) {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // ✅ Load saved timetable
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem('timetableTasks')) || {};
     setTasks(stored);
   }, []);
 
+  // ✅ Save timetable changes
   useEffect(() => {
     localStorage.setItem('timetableTasks', JSON.stringify(tasks));
+  }, [tasks]);
+
+  // 🔔 Notification helper
+  const sendNotification = (title, body) => {
+    if (Notification.permission === "granted") {
+      new Notification(title, { body });
+    }
+  };
+
+  // ⏰ Schedule notifications for upcoming tasks
+  useEffect(() => {
+    Object.keys(tasks).forEach(day => {
+      (tasks[day] || []).forEach(task => {
+        const now = new Date();
+        const taskTime = new Date();
+        const [hours, minutes] = task.time.split(':');
+        const dayIndex = weekdays.indexOf(day);
+        const todayIndex = now.getDay() === 0 ? 6 : now.getDay() - 1;
+
+        const diffDays = (dayIndex - todayIndex + 7) % 7;
+        taskTime.setDate(now.getDate() + diffDays);
+        taskTime.setHours(hours, minutes, 0, 0);
+
+        const diffMs = taskTime - now;
+        if (diffMs > 0 && diffMs < 86400000) {
+          setTimeout(() => {
+            sendNotification('📅 Task Reminder', `${task.content} at ${task.time}`);
+          }, diffMs - 5 * 60 * 1000); // 5 min before
+        }
+      });
+    });
   }, [tasks]);
 
   const addTask = () => {
@@ -42,35 +82,48 @@ const TimetableGenerator = () => {
 
   const deleteTask = (day, index) => {
     const updated = { ...tasks };
+    const deletedTask = updated[day][index];
     updated[day].splice(index, 1);
     setTasks(updated);
+
+    // 🧩 Sync deletion with TrackorA
+    const homework = JSON.parse(localStorage.getItem('homeworkEvents')) || [];
+    const filtered = homework.filter(hw => !deletedTask.content.includes(hw.description));
+    localStorage.setItem('homeworkEvents', JSON.stringify(filtered));
   };
 
+  // 🧠 Smart Auto Scheduler: Adds tasks from TrackorA
   const autoScheduleHomework = () => {
     const homeworkList = JSON.parse(localStorage.getItem('homeworkEvents')) || [];
     const updated = { ...tasks };
-    let usedSlots = new Set();
 
-    for (const hw of homeworkList) {
-      for (const day of weekdays) {
-        for (const time of timeBlocks) {
-          if (
-            (!fixedSchedule.includes(`${day}-${time}`)) &&
-            !(updated[day] || []).some(t => t.time === time) &&
-            !usedSlots.has(`${day}-${time}`)
-          ) {
-            if (!updated[day]) updated[day] = [];
-            updated[day].push({
-              content: `📘 ${hw.subject}: ${hw.description}`,
-              time,
-              done: false
-            });
-            usedSlots.add(`${day}-${time}`);
-            break;
-          }
+    homeworkList.forEach(hw => {
+      const dueDate = new Date(hw.date);
+      const dueDay = weekdays[dueDate.getDay() === 0 ? 6 : dueDate.getDay() - 1];
+
+      if (!updated[dueDay]) updated[dueDay] = [];
+      updated[dueDay].push({
+        content: `📘 ${hw.subject}: ${hw.description}`,
+        time: selectedTime,
+        done: false
+      });
+
+      // 🧩 Auto 4-day Exam Study Plan
+      if (hw.type === 'Exam' || hw.subject.toLowerCase().includes('exam')) {
+        for (let i = 1; i <= 4; i++) {
+          const studyDate = new Date(dueDate);
+          studyDate.setDate(studyDate.getDate() - i);
+          const studyDay = weekdays[studyDate.getDay() === 0 ? 6 : studyDate.getDay() - 1];
+          if (!updated[studyDay]) updated[studyDay] = [];
+          updated[studyDay].push({
+            content: `🧠 Study Session for ${hw.subject} (${i} days left)`,
+            time: '17:00',
+            done: false
+          });
         }
       }
-    }
+    });
+
     setTasks(updated);
   };
 
@@ -82,7 +135,6 @@ const TimetableGenerator = () => {
     const [movedTask] = sourceTasks.splice(source.index, 1);
 
     const destTasks = Array.from(tasks[destination.droppableId] || []);
-    movedTask.time = selectedTime; // Optionally allow time override
     destTasks.splice(destination.index, 0, movedTask);
 
     const updated = {
@@ -97,7 +149,7 @@ const TimetableGenerator = () => {
   return (
     <div className="todoist-layout">
       <div className="topbar">
-        <h2>📅 Timetable Generator</h2>
+        <h2>📅 SchedulorA</h2>
         <div className="topbar-controls">
           <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)}>
             {weekdays.map(day => <option key={day}>{day}</option>)}
@@ -112,7 +164,7 @@ const TimetableGenerator = () => {
             placeholder="Add new task"
           />
           <button onClick={addTask}>➕</button>
-          <button onClick={autoScheduleHomework}>🤖</button>
+          <button onClick={autoScheduleHomework}>🤖 Auto Schedule</button>
         </div>
       </div>
 
