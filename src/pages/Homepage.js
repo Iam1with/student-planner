@@ -24,11 +24,11 @@ const Homepage = () => {
             <h4>🌿 5-Minute Breathing</h4>
             <iframe
               width="100%"
-              height="300"
+              height="560"
               src="https://www.youtube.com/embed/40tPuU6jrgQ?si=YrStnXa2HlG__sRg"
               title="Guided Breathing"
               frameBorder="0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; web-share"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture;"
               referrerpolicy="strict-origin-when-cross-origin"
               allowFullScreen
             ></iframe>
