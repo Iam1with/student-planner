@@ -28,9 +28,11 @@ const Homepage = () => {
               src="https://www.youtube.com/embed/40tPuU6jrgQ?si=YrStnXa2HlG__sRg"
               title="Guided Breathing"
               frameBorder="0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerpolicy="strict-origin-when-cross-origin"
               allowFullScreen
             ></iframe>
+             
           </div>
 
           <div className="tool-card">
