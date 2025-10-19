@@ -23,8 +23,8 @@ const Homepage = () => {
           <div className="tool-card">
             <h4>🌿 5-Minute Breathing</h4>
             <iframe
-              width="200"
-              height="400"
+              width="100%"
+              height="300"
               src="https://www.youtube.com/embed/40tPuU6jrgQ?si=YrStnXa2HlG__sRg"
               title="Guided Breathing"
               frameBorder="0"
