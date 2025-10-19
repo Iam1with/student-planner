@@ -9,7 +9,7 @@ const Explainer = () => {
       <div className="chat-wrapper">
         <iframe
           title="Explainer AI"
-          src="https://landbot.online/v3/H-3055768-GUQF2LWXNXCLJSKH/index.html"
+          src="https://landbot.online/v3/H-3187493-F7KEI7UPWYVQGLKN/index.html"
           className="chat-frame"
           allow="camera; microphone"
         />
