@@ -173,46 +173,28 @@ const TimetableGenerator = () => {
     containerRef.current.scrollTo({ top: clamp(top, 0, 99999), behavior: "smooth" });
   };
 
-  // Drag and drop logic
-  const onDragEnd = (result) => {
+// Drag and drop logic
+const onDragEnd = (result) => {
   const { source, destination, draggableId } = result;
   if (!destination) return;
 
-  const srcDay = source.droppableId;
-  const dstDay = destination.droppableId;
-
   const updated = JSON.parse(JSON.stringify(tasks));
 
+  // Remove from source
+  const [srcDay, srcHour] = source.droppableId.split("-");
   const sourceList = updated[srcDay] || [];
   const [moved] = sourceList.splice(source.index, 1);
 
-  // Destination list
-  const dstList = updated[dstDay] || [];
+  // Destination info
+  const [dstDay, dstHour] = destination.droppableId.split("-");
+  moved.time = dstHour; // <-- update task time based on drop
 
-  // Get Y position of the drop relative to container
-  const containerRect = containerRef.current?.getBoundingClientRect();
-  if (!containerRect) return;
+  // Add to destination list
+  if (!updated[dstDay]) updated[dstDay] = [];
+  updated[dstDay].splice(destination.index, 0, moved);
 
-  // Use the draggable's DOM node to get exact Y
-  const draggableElem = document.querySelector(`[data-rbd-draggable-id='${draggableId}']`);
-  if (draggableElem) {
-    const draggableRect = draggableElem.getBoundingClientRect();
-    const dropY = draggableRect.top - containerRect.top; // Y relative to grid
-
-    // Convert pixel to hour
-    const newHour = clamp(Math.floor(dropY / HOUR_HEIGHT), 0, 23);
-    moved.time = String(newHour).padStart(2, "0") + ":00";
-  } else {
-    // fallback
-    moved.time = studyStart || "07:00";
-  }
-
-  // Insert into destination list at dropped index
-  dstList.splice(destination.index, 0, moved);
-
+  // Save back
   updated[srcDay] = sourceList;
-  updated[dstDay] = dstList;
-
   setTasks(updated);
 };
   // Auto-scheduler: schedules items from TrackorA's homeworkEvents into free slots
@@ -363,19 +345,51 @@ const TimetableGenerator = () => {
                 {timeBlocks.map((tb) => {
                   const blockKey = `${day}-${tb}`;
                   const blocked = fixedSchedule.includes(blockKey);
+                  const hourTasks = dayTasks.filter((t) => t.time === tb);
+                
                   return (
-                    <div
-                      key={blockKey}
-                      className={`hour-slot ${blocked ? "fixed-block" : ""}`}
-                      style={{ height: HOUR_HEIGHT }}
-                      onClick={(e) => {
-                        if (e.altKey) toggleFixedBlock(day, tb); // ✅ FIXED
-                      }}
-                    />
+                    <Droppable key={blockKey} droppableId={blockKey}>
+                      {(provided) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.droppableProps}
+                          className={`hour-slot ${blocked ? "fixed-block" : ""}`}
+                          style={{ height: HOUR_HEIGHT, position: "relative" }}
+                          onClick={(e) => e.altKey && toggleFixedBlock(day, tb)}
+                        >
+                          {hourTasks.map((task, index) => (
+                            <Draggable key={task.id} draggableId={task.id} index={index}>
+                              {(draggableProvided) => (
+                                <div
+                                  ref={draggableProvided.innerRef}
+                                  {...draggableProvided.draggableProps}
+                                  {...draggableProvided.dragHandleProps}
+                                  className={`task-card ${task.done ? "done" : ""}`}
+                                  style={{
+                                    position: "absolute",
+                                    left: 8,
+                                    right: 8,
+                                    height: ((task.duration || 60) / 60) * HOUR_HEIGHT,
+                                    padding: "8px",
+                                    boxSizing: "border-box",
+                                    borderLeft: task.priority === "high" ? "4px solid #e74c3c" : "4px solid #6c8cff",
+                                    background: task.done ? "#d1ffd1" : "#fffbe6",
+                                    ...draggableProvided.draggableProps.style,
+                                  }}
+                                  onContextMenu={(e) => onTaskContext(e, day, index)}
+                                >
+                                  {task.content} - {task.time}
+                                </div>
+                              )}
+                            </Draggable>
+                          ))}
+                          {provided.placeholder}
+                        </div>
+                      )}
+                    </Droppable>
                   );
                 })}
-
-                {/* Tasks */}
+                                {/* Tasks */}
                 {dayTasks.map((task, index) => {
                   const top = parseTimeToHour(task.time) * HOUR_HEIGHT;
                   const height = ((task.duration || 60) / 60) * HOUR_HEIGHT;
