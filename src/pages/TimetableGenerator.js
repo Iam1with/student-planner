@@ -200,37 +200,49 @@ const onDragEnd = (result) => {
   // Auto-scheduler: schedules items from TrackorA's homeworkEvents into free slots
   // - respects fixedSchedule and school/study windows
   // - schedules exam-type items as 4-day study sessions before exam date
+  // Auto-scheduler: schedules homeworkEvents into free slots + marks exams
   const autoSchedule = () => {
     const hwList = JSON.parse(localStorage.getItem("homeworkEvents")) || [];
     const updated = JSON.parse(JSON.stringify(tasks));
     const used = new Set(); // "Day-HH:MM"
-
-    // Helper to check if slot free and not blocked
+  
     const slotFree = (day, time) => {
       if (fixedSchedule.includes(`${day}-${time}`)) return false;
       const dayList = updated[day] || [];
       return !dayList.some((t) => t.time === time);
     };
-
-    // Determine study window hours as integers
+  
     const studyStartH = parseInt(studyStart.split(":")[0], 10);
     const studyEndH = parseInt(studyEnd.split(":")[0], 10);
-
-    // For exam scheduling: create 4 sessions distributed in 4 days before exam
+  
     for (const hw of hwList) {
-      // avoid scheduling duplicates: check if already scheduled (origin === hw.id) in tasks
       const already = Object.values(updated).flat().some((t) => t.origin === hw.id);
       if (already) continue;
-
+  
       const isExam = hw.type === "Exam" || isExamText(hw.description || hw.subject || "");
+  
       if (isExam && hw.date) {
-        // schedule 4 sessions: on days examDate - 4 .. -1
         const examDate = new Date(hw.date);
+        const examWeekday = weekdays[(examDate.getDay() + 6) % 7];
+  
+        // 1️⃣ Add the actual exam task on the exam day
+        if (!updated[examWeekday]) updated[examWeekday] = [];
+        updated[examWeekday].push({
+          id: uid(),
+          content: `📝 Exam: ${hw.subject || hw.description || "Exam"}`,
+          time: studyStart, // default start time, can tweak
+          duration: 60,
+          done: false,
+          origin: hw.id,
+          priority: "high",
+        });
+  
+        // 2️⃣ Schedule 4 pre-exam study sessions
         for (let d = 4; d >= 1; d--) {
           const dayDate = new Date(examDate);
           dayDate.setDate(examDate.getDate() - d);
-          const weekdayName = weekdays[(dayDate.getDay() + 6) % 7]; // JS: 0 Sunday
-          // find earliest free hour in study window
+          const weekdayName = weekdays[(dayDate.getDay() + 6) % 7];
+  
           let placed = false;
           for (let h = studyStartH; h <= studyEndH; h++) {
             const time = String(h).padStart(2, "0") + ":00";
@@ -249,8 +261,9 @@ const onDragEnd = (result) => {
             placed = true;
             break;
           }
+  
           if (!placed) {
-            // try after studyEnd (as fallback) but avoid midnight
+            // fallback: schedule after studyEnd but before 22:00
             for (let h = studyEndH + 1; h <= 22; h++) {
               const time = String(h).padStart(2, "0") + ":00";
               if (!slotFree(weekdayName, time)) continue;
@@ -270,14 +283,14 @@ const onDragEnd = (result) => {
           }
         }
       } else {
-        // Normal homework: schedule in next free study slot (starting today)
-        // We'll iterate next 14 days to find a slot
+        // Normal homework scheduling
         const today = new Date();
         let scheduled = false;
         for (let offset = 0; offset < 14 && !scheduled; offset++) {
           const dt = new Date(today);
           dt.setDate(today.getDate() + offset);
           const dayName = weekdays[(dt.getDay() + 6) % 7];
+  
           for (let h = studyStartH; h <= studyEndH; h++) {
             const time = String(h).padStart(2, "0") + ":00";
             if (!slotFree(dayName, time)) continue;
@@ -297,16 +310,13 @@ const onDragEnd = (result) => {
           }
           if (scheduled) break;
         }
-        // if not scheduled within 14 days, skip
       }
     }
-
+  
     setTasks(updated);
-    // after scheduling, persist and maybe notify user
     localStorage.setItem("timetableTasks", JSON.stringify(updated));
-    alert("Auto-schedule complete (scheduled items from TrackorA into free study blocks).");
+    alert("Auto-schedule complete! 🗓️ Study sessions & exams added.");
   };
-
   const toggleFixedBlock = (day, time) => {
     const key = `${day}-${time}`;
     const updated = [...fixedSchedule];
