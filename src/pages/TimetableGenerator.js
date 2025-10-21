@@ -175,31 +175,46 @@ const TimetableGenerator = () => {
 
   // Drag and drop logic
   const onDragEnd = (result) => {
-    const { source, destination } = result;
-    if (!destination) return;
+  const { source, destination, draggableId } = result;
+  if (!destination) return;
 
-    const srcDay = source.droppableId;
-    const dstDay = destination.droppableId;
-    const srcIdx = source.index;
-    const dstIdx = destination.index;
+  const srcDay = source.droppableId;
+  const dstDay = destination.droppableId;
 
-    const updated = JSON.parse(JSON.stringify(tasks));
-    const sourceList = updated[srcDay] || [];
-    const [moved] = sourceList.splice(srcIdx, 1);
-    // compute new time based on position: place at destination's index start time if available,
-    // else keep moved.time
-    const dstList = updated[dstDay] || [];
-    // find time slot: if inserting between tasks, keep moved.time; else if dropping to empty position, keep selectedTime
-    // We'll set moved.time to the topmost available hour at insertion index. Simplify: if dstList[dstIdx] exists, use that time; else set to studyStart
-    const destTime = (dstList[dstIdx] && dstList[dstIdx].time) || studyStart;
-    moved.time = destTime;
-    dstList.splice(dstIdx, 0, moved);
+  const updated = JSON.parse(JSON.stringify(tasks));
 
-    updated[srcDay] = sourceList;
-    updated[dstDay] = dstList;
-    setTasks(updated);
-  };
+  const sourceList = updated[srcDay] || [];
+  const [moved] = sourceList.splice(source.index, 1);
 
+  // Destination list
+  const dstList = updated[dstDay] || [];
+
+  // Get Y position of the drop relative to container
+  const containerRect = containerRef.current?.getBoundingClientRect();
+  if (!containerRect) return;
+
+  // Use the draggable's DOM node to get exact Y
+  const draggableElem = document.querySelector(`[data-rbd-draggable-id='${draggableId}']`);
+  if (draggableElem) {
+    const draggableRect = draggableElem.getBoundingClientRect();
+    const dropY = draggableRect.top - containerRect.top; // Y relative to grid
+
+    // Convert pixel to hour
+    const newHour = clamp(Math.floor(dropY / HOUR_HEIGHT), 0, 23);
+    moved.time = String(newHour).padStart(2, "0") + ":00";
+  } else {
+    // fallback
+    moved.time = studyStart || "07:00";
+  }
+
+  // Insert into destination list at dropped index
+  dstList.splice(destination.index, 0, moved);
+
+  updated[srcDay] = sourceList;
+  updated[dstDay] = dstList;
+
+  setTasks(updated);
+};
   // Auto-scheduler: schedules items from TrackorA's homeworkEvents into free slots
   // - respects fixedSchedule and school/study windows
   // - schedules exam-type items as 4-day study sessions before exam date
