@@ -1,616 +1,430 @@
 // src/pages/TimetableGenerator.js
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
+import '../App.css';
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import "../App.css";
 
-/**
- * TimetableGenerator (SchedulorA)
- * - 7 vertical day columns (Monday..Sunday)
- * - 24h time slots (30min)
- * - duration support
- * - auto-schedule from homeworkEvents (localStorage)
- * - exam prep: if "exam" in description, schedule study sessions starting 4 days before
- * - right-click edit (time/duration/delete)
- * - drag/drop tasks between days
- * - notification (browser) for tasks (simple)
- */
+/*
+  SchedulorA 2.0 - TimetableGenerator
+  - Vertical 24h columns for each weekday
+  - Drag & drop tasks between days and reposition in time (snaps to 30 min)
+  - Auto-schedule homework and exam-study sessions (4 days before exam)
+  - Syncs with localStorage keys: "homeworkEvents" and "timetableTasks"
+*/
 
-// constants
-const weekdays = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday",
-];
+const weekdays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
-// generate 30-min times from 00:00 to 23:30 as "HH:MM"
-const generateTimeBlocks = () => {
-  const blocks = [];
+// generate 30-min time slots from 00:00 to 23:30
+const generateSlots = () => {
+  const slots = [];
   for (let h = 0; h < 24; h++) {
-    for (let m = 0; m < 60; m += 30) {
-      const hh = String(h).padStart(2, "0");
-      const mm = String(m).padStart(2, "0");
-      blocks.push(`${hh}:${mm}`);
-    }
+    slots.push(`${h.toString().padStart(2,'0')}:00`);
+    slots.push(`${h.toString().padStart(2,'0')}:30`);
   }
-  return blocks;
+  return slots;
 };
-const TIME_BLOCKS = generateTimeBlocks();
-const DEFAULT_DURATION = 60; // minutes
+const TIME_SLOTS = generateSlots();
 
-// helpers
-const timeToMinutes = (t) => {
-  const [hh, mm] = t.split(":").map(Number);
-  return hh * 60 + mm;
+const nowToHHMM = (date = new Date()) => {
+  return date.getHours().toString().padStart(2,'0') + ':' + Math.floor(date.getMinutes() / 30) * 30
+    .toString().padStart(2,'0');
 };
-const minutesToTime = (mins) => {
-  const hh = Math.floor(mins / 60);
-  const mm = mins % 60;
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+
+const snapToSlot = (hhmm) => {
+  // Ensure hh:mm is one of TIME_SLOTS; if mm not 00/30 round down
+  const [h, m] = hhmm.split(':').map(Number);
+  const mm = m >= 30 ? '30' : '00';
+  return `${h.toString().padStart(2,'0')}:${mm}`;
 };
-const overlaps = (aStart, aDur, bStart, bDur) => {
-  return aStart < bStart + bDur && bStart < aStart + aDur;
+
+const minutesToPx = (min) => {
+  // visual scale: 30 min = 30px -> 1 min = 1px
+  // tweak as you like for height scale
+  return Math.round(min);
 };
-const isExamHomework = (hw) =>
-  hw.description && hw.description.toLowerCase().includes("exam");
 
-// localStorage keys
-const LS_TIMETABLE = "timetableTasks"; // saved tasks per day
-const LS_HOMEWORK = "homeworkEvents"; // from TrackorA
-const LS_SETTINGS = "schedSettings"; // school/study settings
+function parseHHMM(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+function hhmmFromMinutes(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2,'0')}`;
+}
 
-export default function TimetableGenerator() {
-  // tasks: { Monday: [{id, content, time, duration, done, origin, homeworkId}], ... }
-  const [tasks, setTasks] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(LS_TIMETABLE)) || {};
-    } catch {
-      return {};
-    }
-  });
+const STORAGE_KEY = "timetableTasks";
 
-  // controls
-  const [selectedDay, setSelectedDay] = useState(weekdays[0]);
-  const [selectedTime, setSelectedTime] = useState("17:00");
-  const [newTask, setNewTask] = useState("");
-  const [durationMinutes, setDurationMinutes] = useState(DEFAULT_DURATION);
-  const [notifyBefore, setNotifyBefore] = useState(10); // minutes before
-  const notificationTimers = useRef([]);
+const TimetableGenerator = () => {
+  const [tasks, setTasks] = useState(() => JSON.parse(localStorage.getItem(STORAGE_KEY)) || {});
+  const [selectedDay, setSelectedDay] = useState('Monday');
+  const [selectedStart, setSelectedStart] = useState(nowToHHMM());
+  const [newTitle, setNewTitle] = useState('');
+  const [schoolStart, setSchoolStart] = useState('07:30');
+  const [schoolEnd, setSchoolEnd] = useState('15:15');
+  const [studyStart, setStudyStart] = useState('16:00');
+  const [studyEnd, setStudyEnd] = useState('21:00');
+  const [fixedBlocks, setFixedBlocks] = useState(() => JSON.parse(localStorage.getItem('fixedSchedule')) || []);
+  const [modalTask, setModalTask] = useState(null); // task object for editor modal
+  const containerRef = useRef(null);
 
-  // settings: schoolStart/schoolEnd/studyStart/studyEnd (HH:MM)
-  const [settings, setSettings] = useState(() => {
-    const def = {
-      schoolStart: "07:30",
-      schoolEnd: "15:15",
-      studyStart: "16:00",
-      studyEnd: "21:00",
-    };
-    try {
-      return JSON.parse(localStorage.getItem(LS_SETTINGS)) || def;
-    } catch {
-      return def;
-    }
-  });
-
-  // small state for right-click edit
-  const [contextTask, setContextTask] = useState(null); // {day,index}
-  const [contextMenuPos, setContextMenuPos] = useState(null);
-
-  // load homeworkEvents from TrackorA (localStorage) to display counts / used by auto-schedule
-  const homeworkList = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem(LS_HOMEWORK)) || [];
-    } catch {
-      return [];
-    }
-  }, [/* no deps; reading directly when needed */]);
-
-  // persist tasks
   useEffect(() => {
-    localStorage.setItem(LS_TIMETABLE, JSON.stringify(tasks));
-    // when tasks change, reschedule notifications (simple)
-    scheduleNotifications();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, notifyBefore]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  }, [tasks]);
 
-  // persist settings
   useEffect(() => {
-    localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
-  }, [settings]);
+    localStorage.setItem('fixedSchedule', JSON.stringify(fixedBlocks));
+  }, [fixedBlocks]);
 
-  // request notification permission on first render
-  useEffect(() => {
-    if ("Notification" in window) {
-      if (Notification.permission === "default") {
-        Notification.requestPermission().catch(() => {});
-      }
-    }
-  }, []);
-
-  // utility: place a task object at a day/time if free (checking duration)
-  function canPlaceAt(day, startTime, duration) {
-    const dayList = tasks[day] || [];
-    const startMin = timeToMinutes(startTime);
-    for (const t of dayList) {
-      const tStart = timeToMinutes(t.time);
-      if (overlaps(startMin, duration, tStart, t.duration || DEFAULT_DURATION)) {
-        return false;
-      }
-    }
-    // also check fixed schedule (school hours) from settings
-    const schoolStart = timeToMinutes(settings.schoolStart);
-    const schoolEnd = timeToMinutes(settings.schoolEnd);
-    // if start is inside school hours, can't
-    if (startMin < schoolEnd && startMin + duration > schoolStart) {
-      // overlapping school time: block
-      return false;
-    }
-    // Respect study hours: prefer placing inside study window; but allow outside if allowed? We'll require placement inside study window.
-    const studyStart = timeToMinutes(settings.studyStart);
-    const studyEnd = timeToMinutes(settings.studyEnd);
-    if (startMin < studyStart || startMin + duration > studyEnd) {
-      return false;
-    }
-    return true;
-  }
-
-  // add a manual task (also saved to tasks)
-  const addTask = () => {
-    if (!newTask.trim()) return;
-    const id = `m-${Date.now()}`;
-    const item = {
-      id,
-      content: newTask.trim(),
-      time: selectedTime,
-      duration: durationMinutes,
+  // helper: create a new task object
+  const createTask = ({ title, day, start, duration = 60, type = 'task', originId = null }) => {
+    return {
+      id: 't-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6),
+      title,
+      start: snapToSlot(start),
+      duration, // minutes
+      type,
       done: false,
-      origin: "manual",
+      originId, // optional pointer to homeworkEvents id in TrackorA
     };
-    setTasks((prev) => {
-      const copy = { ...prev };
-      if (!copy[selectedDay]) copy[selectedDay] = [];
-      copy[selectedDay].push(item);
-      // sort by time
-      copy[selectedDay].sort(
-        (a, b) => timeToMinutes(a.time) - timeToMinutes(b.time)
-      );
-      return copy;
-    });
-    setNewTask("");
-    scheduleNotifications(); // update timers
   };
 
-  // toggle done
-  const toggleDone = (day, index) => {
-    setTasks((prev) => {
-      const copy = JSON.parse(JSON.stringify(prev));
-      if (!copy[day] || !copy[day][index]) return prev;
-      copy[day][index].done = !copy[day][index].done;
-      return copy;
-    });
-  };
-
-  // delete task & sync homeworkEvents and TrackorA events if origin indicates homework
-  const deleteTask = (day, index) => {
-    setTasks((prev) => {
-      const copy = JSON.parse(JSON.stringify(prev));
-      const removed = (copy[day] || []).splice(index, 1)[0];
-      // sync deletion to homeworkEvents if it has homeworkId
-      try {
-        if (removed && removed.homeworkId) {
-          const hwAll = JSON.parse(localStorage.getItem(LS_HOMEWORK)) || [];
-          const newHw = hwAll.filter((h) => h.id !== removed.homeworkId);
-          localStorage.setItem(LS_HOMEWORK, JSON.stringify(newHw));
-        }
-      } catch {}
-      // also try to remove from TrackorA's 'events' object if present (best-effort)
-      try {
-        const eventsObj = JSON.parse(localStorage.getItem("events") || "{}");
-        // find event matching content & remove from that date
-        if (removed && removed.origin === "homework" && removed.homeworkDate) {
-          const dateKey = new Date(removed.homeworkDate).toDateString();
-          if (eventsObj[dateKey]) {
-            eventsObj[dateKey] = eventsObj[dateKey].filter(
-              (e) =>
-                !(e.subject === removed.subject && e.homework === removed.content)
-            );
-            localStorage.setItem("events", JSON.stringify(eventsObj));
-          }
-        }
-      } catch {}
-      scheduleNotifications();
-      return copy;
-    });
-  };
-
-  // AUTO-schedule function:
-  // - Pulls homeworkEvents from localStorage
-  // - For 'exam' items: schedule study sessions starting 4 days before
-  // - For regular homework: try to place it on its due date in a free slot
-  const autoScheduleHomework = () => {
-    const hwList = JSON.parse(localStorage.getItem(LS_HOMEWORK) || "[]");
-    if (!hwList || hwList.length === 0) {
-      alert("No homeworkEvents found in localStorage (TrackorA).");
-      return;
-    }
-    const updated = JSON.parse(JSON.stringify(tasks || {}));
-    const used = new Set(); // day-time used in this run
-
-    // helper to try placing an item on a specific date/day name
-    const tryPlaceOnDate = (dateObj, content, duration, hwId, subject, originDate) => {
-      const dayName = weekdays[(dateObj.getDay() + 6) % 7]; // convert JS Sun=0 to our Monday=0
-      // attempt to find a time inside study window
-      const studyStartMin = timeToMinutes(settings.studyStart);
-      const studyEndMin = timeToMinutes(settings.studyEnd);
-      for (let start = studyStartMin; start + duration <= studyEndMin; start += 30) {
-        const startTime = minutesToTime(start);
-        const slotKey = `${dayName}-${startTime}`;
-        if (used.has(slotKey)) continue;
-        // check conflicts
-        if ((updated[dayName] || []).some((t) => overlaps(start, duration, timeToMinutes(t.time), t.duration || DEFAULT_DURATION))) {
-          continue;
-        }
-        // place
-        if (!updated[dayName]) updated[dayName] = [];
-        updated[dayName].push({
-          id: hwId ? `hw-${hwId}-${Date.now()}` : `a-${Date.now()}`,
-          content,
-          time: startTime,
-          duration,
-          done: false,
-          origin: hwId ? "homework" : "auto",
-          homeworkId: hwId || null,
-          subject: subject || null,
-          homeworkDate: originDate || null,
-        });
-        used.add(slotKey);
-        return true;
-      }
-      return false;
-    };
-
-    // iterate homework list
-    for (const hw of hwList) {
-      const dateStr = hw.date; // homework has date field (due date) from TrackorA
-      if (!dateStr) {
-        // try schedule next available
-        const today = new Date();
-        tryPlaceOnDate(today, `📘 ${hw.subject}: ${hw.description}`, DEFAULT_DURATION, hw.id, hw.subject, dateStr);
-        continue;
-      }
-      const due = new Date(dateStr);
-      if (isExamHomework(hw)) {
-        // schedule 1 study session per day for 4 days prior (or until can place)
-        for (let d = 4; d >= 1; d--) {
-          const dayDate = new Date(due);
-          dayDate.setDate(due.getDate() - d);
-          tryPlaceOnDate(dayDate, `🧪 Study: ${hw.subject}`, 60, hw.id, hw.subject, dateStr);
-        }
-      } else {
-        // try place on the due date; if not, place earlier that week (backwards)
-        let placed = false;
-        for (let offset = 0; offset <= 6 && !placed; offset++) {
-          const dayDate = new Date(due);
-          dayDate.setDate(due.getDate() - offset);
-          placed = tryPlaceOnDate(dayDate, `📘 ${hw.subject}: ${hw.description}`, DEFAULT_DURATION, hw.id, hw.subject, dateStr);
-        }
-        if (!placed) {
-          // as fallback, place on next available day from today
-          const today = new Date();
-          for (let i = 0; i < 14 && !placed; i++) {
-            const tryDate = new Date(today);
-            tryDate.setDate(today.getDate() + i);
-            placed = tryPlaceOnDate(tryDate, `📘 ${hw.subject}: ${hw.description}`, DEFAULT_DURATION, hw.id, hw.subject, dateStr);
-          }
-        }
-      }
-    }
-
-    // sort tasks each day by time
-    for (const d of Object.keys(updated)) {
-      updated[d].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
-    }
+  const addTask = () => {
+    if (!newTitle.trim()) return;
+    const t = createTask({ title: newTitle.trim(), day: selectedDay, start: snapToSlot(selectedStart), duration: 60, type: 'task' });
+    const updated = { ...tasks };
+    if (!updated[selectedDay]) updated[selectedDay] = [];
+    updated[selectedDay].push(t);
     setTasks(updated);
-    // schedule notifications now
-    scheduleNotifications();
+    setNewTitle('');
+    notify(`Task added: ${t.title}`, 5);
   };
 
-  // Drag & drop handlers
+  // Notification helper
+  const notify = (text, timeoutSeconds = 5) => {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+      const n = new Notification("SchedulorA", { body: text });
+      if (timeoutSeconds) setTimeout(() => n.close(), timeoutSeconds * 1000);
+    } else {
+      Notification.requestPermission();
+    }
+  };
+
+  // Toggle a fixed block (format day-HH:MM-durationMinutes)
+  const toggleFixed = (day, hhmm, duration = 60) => {
+    const key = `${day}-${hhmm}-${duration}`;
+    let updated = [...fixedBlocks];
+    if (updated.includes(key)) updated = updated.filter(k => k !== key);
+    else updated.push(key);
+    setFixedBlocks(updated);
+  };
+
+  // Remove task and if it has originId, sync with TrackorA homeworkEvents
+  const removeTask = (day, taskId) => {
+    const updated = { ...tasks };
+    const idx = updated[day]?.findIndex(t => t.id === taskId);
+    if (idx === -1) return;
+    const [removed] = updated[day].splice(idx,1);
+    setTasks(updated);
+
+    // remove from homeworkEvents if originId present
+    if (removed.originId) {
+      const hwAll = JSON.parse(localStorage.getItem('homeworkEvents')) || [];
+      const filtered = hwAll.filter(hw => hw.id !== removed.originId);
+      localStorage.setItem('homeworkEvents', JSON.stringify(filtered));
+    }
+    notify(`Deleted: ${removed.title}`, 3);
+  };
+
+  // Toggle done
+  const toggleDone = (day, id) => {
+    const updated = { ...tasks };
+    const t = updated[day].find(x => x.id === id);
+    if (t) t.done = !t.done;
+    setTasks(updated);
+  };
+
+  // Called when a drag ends
   const onDragEnd = (result) => {
-    const { destination, source } = result;
+    const { source, destination, draggableId } = result;
     if (!destination) return;
+    const fromDay = source.droppableId;
+    const toDay = destination.droppableId;
 
-    const sourceDay = source.droppableId;
-    const destDay = destination.droppableId;
-    const sourceIndex = source.index;
-    const destIndex = destination.index;
+    const sourceList = Array.from(tasks[fromDay] || []);
+    const [moved] = sourceList.splice(source.index, 1);
 
-    setTasks((prev) => {
-      const copy = JSON.parse(JSON.stringify(prev));
-      const sourceList = Array.from(copy[sourceDay] || []);
-      const [moved] = sourceList.splice(sourceIndex, 1);
-      if (!copy[destDay]) copy[destDay] = [];
-      // preserve time/duration. When moving across days, keep same time. If overlapping, we keep and rely on user to adjust.
-      copy[destDay].splice(destIndex, 0, moved);
-      copy[sourceDay] = sourceList;
-      // sort by time to keep ordering
-      copy[destDay].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
-      if (sourceDay !== destDay) {
-        copy[sourceDay].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
-      }
-      return copy;
-    });
+    const destList = Array.from(tasks[toDay] || []);
+
+    // Estimate new start time based on index position -> keep same start, but if moved within same column reorder
+    // For better UX we allow the user to edit start time in modal; for now keep moved task same start.
+    destList.splice(destination.index, 0, moved);
+
+    const updated = { ...tasks, [fromDay]: sourceList, [toDay]: destList };
+    setTasks(updated);
   };
 
-  // Right-click context menu (simple) — edit time/duration/delete
-  const onTaskContext = (e, day, index) => {
-    e.preventDefault();
-    setContextTask({ day, index });
-    setContextMenuPos({ x: e.clientX, y: e.clientY });
+  // open editor modal
+  const openEditor = (day, task) => {
+    setModalTask({ ...task, day });
   };
 
-  const closeContext = () => {
-    setContextTask(null);
-    setContextMenuPos(null);
+  const saveModalTask = (edited) => {
+    const updated = { ...tasks };
+    const list = updated[edited.day] || [];
+    const idx = list.findIndex(t => t.id === edited.id);
+    if (idx !== -1) {
+      // snap start to slot and ensure duration numeric
+      edited.start = snapToSlot(edited.start);
+      edited.duration = Number(edited.duration) || 60;
+      list[idx] = edited;
+      updated[edited.day] = list;
+      setTasks(updated);
+    }
+    setModalTask(null);
   };
 
-  const applyContextEdit = () => {
-    if (!contextTask) return;
-    const newTime = prompt("Enter new start time (HH:MM)", tasks[contextTask.day][contextTask.index].time);
-    if (!newTime) {
-      closeContext();
+  // ===== AUTO SCHEDULER =====
+  // schedule homework into free study slots while respecting fixed schedule and school hours
+  const autoScheduleHomework = () => {
+    const homeworkList = JSON.parse(localStorage.getItem('homeworkEvents')) || [];
+    if (!homeworkList.length) {
+      alert("No homeworkEvents found in localStorage (TrackorA should save to key 'homeworkEvents').");
       return;
     }
-    const newDur = parseInt(prompt("Duration in minutes (e.g. 30, 45, 60)", String(tasks[contextTask.day][contextTask.index].duration || DEFAULT_DURATION)), 10);
-    if (!newDur || isNaN(newDur)) {
-      alert("Invalid duration.");
-      closeContext();
-      return;
-    }
-    setTasks((prev) => {
-      const copy = JSON.parse(JSON.stringify(prev));
-      const t = copy[contextTask.day][contextTask.index];
-      t.time = newTime;
-      t.duration = newDur;
-      // attempt sort
-      copy[contextTask.day].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
-      return copy;
-    });
-    closeContext();
-  };
 
-  // delete via context
-  const applyContextDelete = () => {
-    if (!contextTask) return;
-    if (!window.confirm("Delete this task?")) {
-      closeContext();
-      return;
-    }
-    deleteTask(contextTask.day, contextTask.index);
-    closeContext();
-  };
+    // copy existing tasks (don't mutate state directly)
+    const updated = { ...tasks };
+    const used = new Set(); // used day-slot strings
 
-  // Notifications: basic scheduling in-memory (non-persistent)
-  function scheduleNotifications() {
-    // clear old timers
-    notificationTimers.current.forEach((t) => clearTimeout(t));
-    notificationTimers.current = [];
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
-
-    // find upcoming tasks within next 24h
-    const now = new Date();
-    for (const day of weekdays) {
-      const dayList = tasks[day] || [];
-      for (const t of dayList) {
-        // compute next date matching this weekday within next 7 days
-        const nowDay = (now.getDay() + 6) % 7; // Monday=0
-        const targetDayIndex = weekdays.indexOf(day);
-        let daysUntil = (targetDayIndex - nowDay + 7) % 7;
-        const candidate = new Date(now);
-        candidate.setDate(now.getDate() + daysUntil);
-        // set time
-        const [hh, mm] = t.time.split(":").map(Number);
-        candidate.setHours(hh, mm, 0, 0);
-        // skip past
-        const notifyAt = new Date(candidate.getTime() - notifyBefore * 60000);
-        const timeUntil = notifyAt.getTime() - Date.now();
-        if (timeUntil > 0 && timeUntil < 7 * 24 * 3600 * 1000) {
-          const timer = setTimeout(() => {
-            try {
-              new Notification(`Upcoming: ${t.content}`, {
-                body: `Starts at ${t.time} (${t.duration || DEFAULT_DURATION}m)`,
-              });
-            } catch {}
-          }, timeUntil);
-          notificationTimers.current.push(timer);
+    // mark used slots from existing tasks
+    for (const d of weekdays) {
+      (updated[d] || []).forEach(t => {
+        const startMin = parseHHMM(t.start);
+        const slotsCount = Math.ceil(t.duration / 30);
+        let mm = startMin;
+        for (let s = 0; s < slotsCount; s++) {
+          used.add(`${d}-${hhmmFromMinutes(mm)}`);
+          mm += 30;
         }
-      }
-    }
-  }
-
-  // UI: small helper to render time axis left (optional)
-  const renderTimeAxis = () => {
-    return (
-      <div className="time-axis">
-        {TIME_BLOCKS.map((tb) => (
-          <div className="time-block" key={tb}>
-            {tb}
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  // reset helpers
-  const clearTimetable = () => {
-    if (!window.confirm("Clear all timetable tasks?")) return;
-    setTasks({});
-  };
-
-  // small convenience to import all homeworkEvents into timetable as tasks (without auto placement)
-  const importAllHomeworkAsTasks = () => {
-    const hw = JSON.parse(localStorage.getItem(LS_HOMEWORK) || "[]");
-    const copy = JSON.parse(JSON.stringify(tasks || {}));
-    for (const h of hw) {
-      // place on its homework date if possible
-      let dayName = "Monday";
-      if (h.date) {
-        const dt = new Date(h.date);
-        dayName = weekdays[(dt.getDay() + 6) % 7];
-      } else {
-        // if no date, place today
-        const dt = new Date();
-        dayName = weekdays[(dt.getDay() + 6) % 7];
-      }
-      if (!copy[dayName]) copy[dayName] = [];
-      // push at study start
-      copy[dayName].push({
-        id: `hw-${h.id}`,
-        content: `📘 ${h.subject}: ${h.description}`,
-        time: settings.studyStart,
-        duration: DEFAULT_DURATION,
-        done: false,
-        origin: "homework",
-        homeworkId: h.id,
-        subject: h.subject,
-        homeworkDate: h.date || null,
       });
     }
-    // sort each day
-    for (const d of Object.keys(copy)) {
-      copy[d].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
+
+    // helper to check if slot blocked (returns true if blocked)
+    const isBlocked = (day, hhmm) => {
+      // school hours
+      const sMin = parseHHMM(schoolStart);
+      const eMin = parseHHMM(schoolEnd);
+      const curMin = parseHHMM(hhmm);
+      if (curMin >= sMin && curMin < eMin) return true;
+      // fixedBlocks check (blocks by exact slot)
+      for (const b of fixedBlocks) {
+        // b format day-HH:MM-duration
+        const [bd, btime, bdur] = b.split('-');
+        if (bd !== day) continue;
+        const start = parseHHMM(btime);
+        const dur = Number(bdur || 60);
+        if (curMin >= start && curMin < start + dur) return true;
+      }
+      return false;
+    };
+
+    // place exam study sessions first
+    const examEvents = homeworkList.filter(hw => /exam|test/i.test(hw.description || hw.subject || ""));
+    for (const ex of examEvents) {
+      // parse exam date string -> try to schedule study sessions 4 days before
+      // homeworkEvents should contain date in human readable form; fallback: schedule into next available
+      // We'll schedule study blocks 4 days before the exam date at preferred study hours
+      let examDate = new Date(ex.date || Date.now());
+      // if string like "Sun Jul 20 2025" Date can parse
+      if (typeof ex.date === 'string') examDate = new Date(ex.date);
+      // compute start day (4 days before)
+      const startDay = new Date(examDate);
+      startDay.setDate(examDate.getDate() - 4);
+
+      // generate 4 days list
+      const daysToFill = [];
+      for (let i = 0; i < 4; i++) {
+        const d = new Date(startDay);
+        d.setDate(startDay.getDate() + i);
+        daysToFill.push(d);
+      }
+
+      // default 2 hours total study (can be adjusted); we will split into 1hr/day as you wanted default 1hr
+      const totalMinutes = 60 * 4; // 4 hours total across 4 days -> 1 hr/day
+      const perDay = Math.max(30, Math.round(totalMinutes / daysToFill.length)); // default 60
+
+      for (const dDate of daysToFill) {
+        const dayName = weekdays[dDate.getDay() === 0 ? 6 : dDate.getDay()-1]; // map Sun=0 -> index 6
+        // find first free slot in study window
+        let placed = false;
+        for (let minute = parseHHMM(studyStart); minute <= parseHHMM(studyEnd) - perDay; minute += 30) {
+          const hh = hhmmFromMinutes(minute);
+          if (isBlocked(dayName, hh)) continue;
+          if (used.has(`${dayName}-${hh}`)) continue;
+          // place study session of perDay minutes starting at hh
+          const studyTask = createTask({
+            title: `Study: ${ex.subject}`,
+            day: dayName,
+            start: hh,
+            duration: perDay,
+            type: 'study',
+            originId: ex.id,
+          });
+          if (!updated[dayName]) updated[dayName] = [];
+          updated[dayName].push(studyTask);
+
+          // mark used slots
+          let m = parseHHMM(hh);
+          const slotsCount = Math.ceil(perDay / 30);
+          for (let s = 0; s < slotsCount; s++) {
+            used.add(`${dayName}-${hhmmFromMinutes(m)}`);
+            m += 30;
+          }
+          placed = true;
+          break;
+        }
+        // if not placed, try next day - we prioritized study window; if can't find, skip
+      }
     }
-    setTasks(copy);
+
+    // schedule regular homework (non-exam)
+    const normalHw = homeworkList.filter(hw => !/exam|test/i.test(hw.description || hw.subject || ""));
+    for (const hw of normalHw) {
+      // try putting it into the next 7 days starting today
+      const today = new Date();
+      let scheduled = false;
+      for (let dOff = 0; dOff < 7 && !scheduled; dOff++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + dOff);
+        const dayName = weekdays[d.getDay() === 0 ? 6 : d.getDay()-1];
+        for (let minute = parseHHMM(studyStart); minute <= parseHHMM(studyEnd) - 60; minute += 30) {
+          const hh = hhmmFromMinutes(minute);
+          if (isBlocked(dayName, hh)) continue;
+          if (used.has(`${dayName}-${hh}`)) continue;
+          // place 60-min homework block
+          const hwTask = createTask({
+            title: `${hw.subject}: ${hw.description}`,
+            day: dayName,
+            start: hh,
+            duration: 60,
+            type: 'homework',
+            originId: hw.id,
+          });
+          if (!updated[dayName]) updated[dayName] = [];
+          updated[dayName].push(hwTask);
+          // mark used slots
+          let m = parseHHMM(hh);
+          for (let s = 0; s < 2; s++) { // 2 * 30min = 60
+            used.add(`${dayName}-${hhmmFromMinutes(m)}`);
+            m += 30;
+          }
+          scheduled = true;
+          break;
+        }
+      }
+    }
+
+    setTasks(updated);
+    notify("Auto-schedule complete");
   };
 
-  // UI rendering
+  // helper: compute vertical position in pixels for task -- based on start minutes since 00:00
+  const computeTopPx = (hhmm) => {
+    const min = parseHHMM(hhmm);
+    // mapping 1 minute -> 1px (we used minutesToPx), you can adjust scale
+    return minutesToPx(min);
+  };
+
+  // UI renderers
   return (
-    <div className="schedulor-page" style={{ padding: 16 }}>
-      <div className="topbar" style={{ marginBottom: 12 }}>
-        <h2 style={{ margin: 0 }}>SchedulorA — Timetable Generator</h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)}>
-            {weekdays.map((w) => <option key={w} value={w}>{w}</option>)}
-          </select>
-          <select value={selectedTime} onChange={(e) => setSelectedTime(e.target.value)}>
-            {TIME_BLOCKS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <input style={{ minWidth: 240 }} value={newTask} onChange={(e) => setNewTask(e.target.value)} placeholder="Add task (also saved to timetable only)" />
-          <select value={durationMinutes} onChange={(e) => setDurationMinutes(Number(e.target.value))}>
-            {[30,45,60,90,120,180].map(d => <option key={d} value={d}>{d} min</option>)}
-          </select>
-          <button onClick={addTask}>➕ Add</button>
-          <button onClick={autoScheduleHomework}>🤖 Auto-schedule</button>
-          <button onClick={importAllHomeworkAsTasks}>⬇ Import HW</button>
-          <button onClick={clearTimetable}>🧹 Clear</button>
-        </div>
-      </div>
-
-      <div className="settings-row" style={{ display: "flex", gap: 12, marginBottom: 14 }}>
-        <div>
-          <div><strong>School start</strong></div>
-          <input value={settings.schoolStart} onChange={(e) => setSettings({...settings, schoolStart: e.target.value})}/>
-        </div>
-        <div>
-          <div><strong>School end</strong></div>
-          <input value={settings.schoolEnd} onChange={(e) => setSettings({...settings, schoolEnd: e.target.value})}/>
-        </div>
-        <div>
-          <div><strong>Study start</strong></div>
-          <input value={settings.studyStart} onChange={(e) => setSettings({...settings, studyStart: e.target.value})}/>
-        </div>
-        <div>
-          <div><strong>Study end</strong></div>
-          <input value={settings.studyEnd} onChange={(e) => setSettings({...settings, studyEnd: e.target.value})}/>
+    <div className="schedulor-page">
+      <div className="schedulor-top">
+        <div className="brand">
+          <h1>SchedulorA — Timetable Generator</h1>
         </div>
 
-        <div style={{ marginLeft: "auto" }}>
-          <div><strong>Notify (min before)</strong></div>
-          <input type="number" value={notifyBefore} onChange={(e) => setNotifyBefore(Number(e.target.value))} style={{ width: 80 }} />
-        </div>
-      </div>
+        <div className="controls">
+          <div className="control-row">
+            <label>School start</label>
+            <input type="time" value={schoolStart} onChange={(e) => setSchoolStart(e.target.value)} />
+            <label>School end</label>
+            <input type="time" value={schoolEnd} onChange={(e) => setSchoolEnd(e.target.value)} />
+            <label>Study start</label>
+            <input type="time" value={studyStart} onChange={(e) => setStudyStart(e.target.value)} />
+            <label>Study end</label>
+            <input type="time" value={studyEnd} onChange={(e) => setStudyEnd(e.target.value)} />
+          </div>
 
-      {/* main grid: time axis + day columns */}
-      <div className="scheduler-grid" style={{ display: "flex", gap: 12 }}>
-        {/* left time axis */}
-        <div style={{ width: 80 }}>
-          <div style={{ fontWeight: "bold", marginBottom: 6 }}>Time</div>
-          <div style={{ height: "60vh", overflowY: "auto", borderRadius: 6, paddingRight: 8 }}>
-            {TIME_BLOCKS.map((t) => (
-              <div key={t} className="time-row" style={{ height: 32, color: "#666", paddingLeft: 6 }}>
-                {t}
-              </div>
-            ))}
+          <div className="control-row">
+            <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)}>
+              {weekdays.map(w => <option key={w} value={w}>{w}</option>)}
+            </select>
+            <input type="time" value={selectedStart} onChange={(e) => setSelectedStart(e.target.value)} />
+            <input placeholder="Task title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} />
+            <button onClick={addTask} className="btn">➕ Add</button>
+            <button onClick={autoScheduleHomework} className="btn primary">🤖 Auto-schedule</button>
           </div>
         </div>
+      </div>
 
-        {/* day columns */}
+      <div className="schedule-area" ref={containerRef}>
+        <div className="time-column">
+          {TIME_SLOTS.map(slot => (
+            <div key={slot} className="time-slot">
+              <div className="time-label">{slot}</div>
+            </div>
+          ))}
+        </div>
+
         <DragDropContext onDragEnd={onDragEnd}>
-          <div style={{ display: "flex", gap: 12, flexGrow: 1, overflowX: "auto" }}>
-            {weekdays.map((day) => (
-              <Droppable key={day} droppableId={day}>
+          <div className="days-columns">
+            {weekdays.map(day => (
+              <Droppable droppableId={day} key={day}>
                 {(provided) => (
-                  <div
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                    style={{
-                      minWidth: 300,
-                      background: "#fff",
-                      borderRadius: 8,
-                      padding: 12,
-                      boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
-                      height: "60vh",
-                      overflowY: "auto",
-                      display: "flex",
-                      flexDirection: "column"
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                      <strong>{day}</strong>
-                      <span style={{ color: "#888", fontSize: 12 }}>{(tasks[day] || []).length} tasks</span>
-                    </div>
+                  <div className="day-column" ref={provided.innerRef} {...provided.droppableProps}>
+                    <div className="day-header">{day}</div>
+                    <div className="day-body">
+                      {/* render fixed blocks as faded overlay */}
+                      {fixedBlocks.filter(b => b.startsWith(`${day}-`)).map((b, idx) => {
+                        const [, start, dur] = b.split('-');
+                        const top = computeTopPx(start);
+                        const height = minutesToPx(Number(dur));
+                        return <div key={b} className="fixed-block" style={{ top, height }} />;
+                      })}
 
-                    {(tasks[day] || []).length === 0 && <div style={{ color: "#888", fontSize: 13, marginBottom: 6 }}>No tasks</div>}
-
-                    {(tasks[day] || []).map((task, idx) => (
-                      <Draggable key={task.id || `${day}-${idx}`} draggableId={task.id || `${day}-${idx}`} index={idx}>
-                        {(prov) => (
-                          <div
-                            ref={prov.innerRef}
-                            {...prov.draggableProps}
-                            {...prov.dragHandleProps}
-                            onContextMenu={(e) => onTaskContext(e, day, idx)}
-                            style={{
-                              padding: 8,
-                              marginBottom: 8,
-                              borderRadius: 6,
-                              background: task.done ? "#e6ffe6" : "#fffbe6",
-                              border: "1px solid #ddd",
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              ...prov.draggableProps.style,
-                            }}
-                          >
-                            <div style={{ maxWidth: "75%" }}>
-                              <div style={{ fontWeight: "600" }}>{task.time} • {task.content}</div>
-                              <div style={{ fontSize: 12, color: "#666" }}>
-                                {task.duration || DEFAULT_DURATION} min {task.origin === "homework" ? `• hw` : ""}
+                      {/* tasks */}
+                      {(tasks[day] || []).map((task, index) => {
+                        const top = computeTopPx(task.start);
+                        const height = minutesToPx(task.duration);
+                        return (
+                          <Draggable key={task.id} draggableId={task.id} index={index}>
+                            {(prov) => (
+                              <div
+                                ref={prov.innerRef}
+                                {...prov.draggableProps}
+                                {...prov.dragHandleProps}
+                                className={`task-card ${task.type} ${task.done ? 'done' : ''}`}
+                                style={{ top, height }}
+                                onDoubleClick={() => openEditor(day, task)}
+                                title={`${task.title} — ${task.start} (${task.duration}m)`}
+                              >
+                                <div className="task-info">
+                                  <div className="task-time">{task.start}</div>
+                                  <div className="task-title">{task.title}</div>
+                                </div>
+                                <div className="task-actions">
+                                  <button onClick={() => toggleDone(day, task.id)}>✔</button>
+                                  <button onClick={() => removeTask(day, task.id)}>🗑</button>
+                                </div>
                               </div>
-                            </div>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                              <button title="Done" onClick={() => toggleDone(day, idx)} style={{ cursor: "pointer" }}>✅</button>
-                              <button title="Delete" onClick={() => deleteTask(day, idx)} style={{ cursor: "pointer" }}>🗑️</button>
-                            </div>
-                          </div>
-                        )}
-                      </Draggable>
-                    ))}
+                            )}
+                          </Draggable>
+                        );
+                      })}
 
-                    {provided.placeholder}
+                      {provided.placeholder}
+                    </div>
                   </div>
                 )}
               </Droppable>
@@ -619,34 +433,39 @@ export default function TimetableGenerator() {
         </DragDropContext>
       </div>
 
-      {/* Context menu for right-click */}
-      {contextMenuPos && contextTask && (
-        <div
-          style={{
-            position: "fixed",
-            top: contextMenuPos.y,
-            left: contextMenuPos.x,
-            background: "#fff",
-            border: "1px solid #ccc",
-            padding: 8,
-            zIndex: 9999,
-            borderRadius: 6,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.12)"
-          }}
-        >
-          <div style={{ marginBottom: 8 }}>
-            <strong>Edit task</strong>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={applyContextEdit}>Edit time/duration</button>
-            <button onClick={applyContextDelete} style={{ background: "#f8d7da" }}>Delete</button>
-            <button onClick={closeContext}>Cancel</button>
+      {/* Modal editor */}
+      {modalTask && (
+        <div className="modal-overlay" onClick={() => setModalTask(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Edit Task</h3>
+            <label>Title</label>
+            <input value={modalTask.title} onChange={(e) => setModalTask({ ...modalTask, title: e.target.value })} />
+            <label>Day</label>
+            <select value={modalTask.day} onChange={(e) => setModalTask({ ...modalTask, day: e.target.value })}>
+              {weekdays.map(w => <option key={w} value={w}>{w}</option>)}
+            </select>
+            <label>Start</label>
+            <input type="time" value={modalTask.start} onChange={(e) => setModalTask({ ...modalTask, start: e.target.value })} />
+            <label>Duration (minutes)</label>
+            <input type="number" value={modalTask.duration} onChange={(e) => setModalTask({ ...modalTask, duration: Number(e.target.value) })} />
+            <label>Type</label>
+            <select value={modalTask.type} onChange={(e) => setModalTask({ ...modalTask, type: e.target.value })}>
+              <option value="task">Task</option>
+              <option value="homework">Homework</option>
+              <option value="exam">Exam</option>
+              <option value="study">Study</option>
+              <option value="other">Other</option>
+            </select>
+
+            <div className="modal-actions">
+              <button onClick={() => saveModalTask(modalTask)} className="btn">Save</button>
+              <button onClick={() => setModalTask(null)} className="btn">Cancel</button>
+            </div>
           </div>
         </div>
       )}
-      <div style={{ marginTop: 12, color: "#555", fontSize: 13 }}>
-        <p><strong>Notes:</strong> Right-click tasks to edit time/duration. Auto-scheduler reads TrackorA homeworkEvents (localStorage key <code>homeworkEvents</code>) and will schedule study sessions before exams (4 days). Deleting a task that came from homework will remove its homeworkEvents entry.</p>
-      </div>
     </div>
   );
-}
+};
+
+export default TimetableGenerator;
