@@ -200,123 +200,100 @@ const onDragEnd = (result) => {
   // Auto-scheduler: schedules items from TrackorA's homeworkEvents into free slots
   // - respects fixedSchedule and school/study windows
   // - schedules exam-type items as 4-day study sessions before exam date
-  // Auto-scheduler: schedules homeworkEvents into free slots + marks exams
-  const autoSchedule = () => {
-    const hwList = JSON.parse(localStorage.getItem("homeworkEvents")) || [];
-    const updated = JSON.parse(JSON.stringify(tasks));
-    const used = new Set(); // "Day-HH:MM"
-  
-    const slotFree = (day, time) => {
-      if (fixedSchedule.includes(`${day}-${time}`)) return false;
-      const dayList = updated[day] || [];
-      return !dayList.some((t) => t.time === time);
-    };
-  
-    const studyStartH = parseInt(studyStart.split(":")[0], 10);
-    const studyEndH = parseInt(studyEnd.split(":")[0], 10);
-  
-    for (const hw of hwList) {
-      const already = Object.values(updated).flat().some((t) => t.origin === hw.id);
-      if (already) continue;
-  
-      const isExam = hw.type === "Exam" || isExamText(hw.description || hw.subject || "");
-  
-      if (isExam && hw.date) {
-        const examDate = new Date(hw.date);
-        const examWeekday = weekdays[(examDate.getDay() + 6) % 7];
-  
-        // 1️⃣ Add the actual exam task on the exam day
-        if (!updated[examWeekday]) updated[examWeekday] = [];
-        updated[examWeekday].push({
-          id: uid(),
-          content: `📝 Exam: ${hw.subject || hw.description || "Exam"}`,
-          time: studyStart, // default start time, can tweak
-          duration: 60,
-          done: false,
-          origin: hw.id,
-          priority: "high",
-        });
-  
-        // 2️⃣ Schedule 4 pre-exam study sessions
-        for (let d = 4; d >= 1; d--) {
-          const dayDate = new Date(examDate);
-          dayDate.setDate(examDate.getDate() - d);
-          const weekdayName = weekdays[(dayDate.getDay() + 6) % 7];
-  
-          let placed = false;
-          for (let h = studyStartH; h <= studyEndH; h++) {
-            const time = String(h).padStart(2, "0") + ":00";
-            if (!slotFree(weekdayName, time)) continue;
-            if (!updated[weekdayName]) updated[weekdayName] = [];
-            updated[weekdayName].push({
-              id: uid(),
-              content: `📚 Study for ${hw.subject || hw.description || "Exam"}`,
-              time,
-              duration: 60,
-              done: false,
-              origin: hw.id,
-              priority: "high",
-            });
-            used.add(`${weekdayName}-${time}`);
-            placed = true;
-            break;
-          }
-  
-          if (!placed) {
-            // fallback: schedule after studyEnd but before 22:00
-            for (let h = studyEndH + 1; h <= 22; h++) {
-              const time = String(h).padStart(2, "0") + ":00";
-              if (!slotFree(weekdayName, time)) continue;
-              if (!updated[weekdayName]) updated[weekdayName] = [];
-              updated[weekdayName].push({
-                id: uid(),
-                content: `📚 Study for ${hw.subject || hw.description || "Exam"}`,
-                time,
-                duration: 60,
-                done: false,
-                origin: hw.id,
-                priority: "high",
-              });
-              used.add(`${weekdayName}-${time}`);
-              break;
-            }
-          }
+ // Auto-scheduler: schedules homeworkEvents into free slots + marks exams visibly
+const autoSchedule = () => {
+  const hwList = JSON.parse(localStorage.getItem("homeworkEvents")) || [];
+  const updated = JSON.parse(JSON.stringify(tasks));
+
+  const slotFree = (day, time) => {
+    if (fixedSchedule.includes(`${day}-${time}`)) return false;
+    const dayList = updated[day] || [];
+    return !dayList.some((t) => t.time === time);
+  };
+
+  const studyStartH = parseInt(studyStart.split(":")[0], 10);
+  const studyEndH = parseInt(studyEnd.split(":")[0], 10);
+
+  for (const hw of hwList) {
+    const already = Object.values(updated).flat().some((t) => t.origin === hw.id);
+    if (already) continue;
+
+    // 📘 Homework
+    if (hw.type === "Homework") {
+      const today = new Date();
+      let scheduled = false;
+      for (let offset = 0; offset < 14 && !scheduled; offset++) {
+        const dt = new Date(today);
+        dt.setDate(today.getDate() + offset);
+        const dayName = weekdays[(dt.getDay() + 6) % 7];
+
+        for (let h = studyStartH; h <= studyEndH; h++) {
+          const time = String(h).padStart(2, "0") + ":00";
+          if (!slotFree(dayName, time)) continue;
+          if (!updated[dayName]) updated[dayName] = [];
+          updated[dayName].push({
+            id: uid(),
+            content: `📘 ${hw.subject}: ${hw.description}`,
+            time,
+            duration: 60,
+            done: false,
+            origin: hw.id,
+            priority: "normal",
+          });
+          scheduled = true;
+          break;
         }
-      } else {
-        // Normal homework scheduling
-        const today = new Date();
-        let scheduled = false;
-        for (let offset = 0; offset < 14 && !scheduled; offset++) {
-          const dt = new Date(today);
-          dt.setDate(today.getDate() + offset);
-          const dayName = weekdays[(dt.getDay() + 6) % 7];
-  
-          for (let h = studyStartH; h <= studyEndH; h++) {
-            const time = String(h).padStart(2, "0") + ":00";
-            if (!slotFree(dayName, time)) continue;
-            if (!updated[dayName]) updated[dayName] = [];
-            updated[dayName].push({
-              id: uid(),
-              content: `📘 ${hw.subject || "Homework"}: ${hw.description || ""}`,
-              time,
-              duration: 60,
-              done: false,
-              origin: hw.id,
-              priority: "normal",
-            });
-            used.add(`${dayName}-${time}`);
-            scheduled = true;
-            break;
-          }
-          if (scheduled) break;
+      }
+      continue;
+    }
+
+    // 📝 Exam
+    if (hw.type === "Exam" && hw.date) {
+      const examDate = new Date(hw.date);
+      const examWeekday = weekdays[(examDate.getDay() + 6) % 7];
+      const examTime = hw.time || "09:00";
+
+      // 1️⃣ Add visible exam task
+      if (!updated[examWeekday]) updated[examWeekday] = [];
+      updated[examWeekday].push({
+        id: uid(),
+        content: `📝 Exam: ${hw.subject} (${hw.description})`,
+        time: examTime,
+        duration: hw.duration || 60,
+        done: false,
+        origin: hw.id,
+        priority: "high",
+      });
+
+      // 2️⃣ Add 4 study sessions before exam
+      for (let d = 4; d >= 1; d--) {
+        const studyDate = new Date(examDate);
+        studyDate.setDate(examDate.getDate() - d);
+        const studyDay = weekdays[(studyDate.getDay() + 6) % 7];
+
+        for (let h = studyStartH; h <= studyEndH; h++) {
+          const time = String(h).padStart(2, "0") + ":00";
+          if (!slotFree(studyDay, time)) continue;
+          if (!updated[studyDay]) updated[studyDay] = [];
+          updated[studyDay].push({
+            id: uid(),
+            content: `📚 Study for ${hw.subject}`,
+            time,
+            duration: 60,
+            done: false,
+            origin: hw.id,
+            priority: "high",
+          });
+          break;
         }
       }
     }
-  
-    setTasks(updated);
-    localStorage.setItem("timetableTasks", JSON.stringify(updated));
-    alert("Auto-schedule complete! 🗓️ Study sessions & exams added.");
-  };
+  }
+
+  setTasks(updated);
+  localStorage.setItem("timetableTasks", JSON.stringify(updated));
+  alert("Auto-schedule complete! 🗓️ Exams + Study sessions added.");
+};
   const toggleFixedBlock = (day, time) => {
     const key = `${day}-${time}`;
     const updated = [...fixedSchedule];
