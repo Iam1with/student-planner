@@ -547,3 +547,63 @@ button:hover {
   .days-columns { flex-direction:column; }
   .time-column { display:none; }
 }
+.scheduler-container {
+  background: #f9fbff;
+  padding: 20px;
+  border-radius: 10px;
+  min-height: 100vh;
+  color: #222;
+}
+
+.top-controls {
+  background: #fff;
+  padding: 12px;
+  border-radius: 10px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+}
+
+.inputs-row select,
+.inputs-row input,
+.inputs-row button {
+  margin-right: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+}
+
+.calendar-grid {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 8px;
+}
+
+.day-column {
+  background: #fff;
+  border-radius: 8px;
+  min-width: 200px;
+  padding: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.task {
+  background: #f0f4ff;
+  border-left: 4px solid #4a6cf7;
+  padding: 8px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+}
+
+.task-done {
+  background: #d7ffd7;
+  border-left: 4px solid #28a745;
+}
+
+.task-buttons button {
+  margin-left: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+}
