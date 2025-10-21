@@ -612,3 +612,100 @@ button:hover {
 .task-card { transition: transform .12s ease; }
 .task-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
 .time-row { color: #666; font-size: 12px; padding-top: 18px; }
+/* Add to App.css or import a small css file */
+.schedulora-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #122b57;
+  color: white;
+  padding: 18px;
+  gap: 12px;
+}
+
+.schedulora-topbar .controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.schedulora-topbar input,
+.schedulora-topbar select {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+}
+
+.primary-btn {
+  background: #6c8cff;
+  color: white;
+  border: none;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.primary-btn.outline {
+  background: white;
+  color: #122b57;
+  border: 1px solid #6c8cff;
+}
+
+/* grid */
+.time-column {
+  width: 80px;
+  flex-shrink: 0;
+  border-right: 1px solid #eee;
+  margin-right: 8px;
+}
+.time-row {
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  color: #777;
+  border-bottom: 1px dashed #f0eae6;
+  box-sizing: border-box;
+}
+.time-label {
+  font-size: 0.9rem;
+}
+
+/* days */
+.day-column {
+  background: transparent;
+  width: 220px;
+  min-width: 220px;
+  border-radius: 8px;
+}
+.day-header {
+  font-weight: 700;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+.day-body {
+  background: transparent;
+  position: relative;
+}
+
+/* hour slot shading for fixed schedule (if you add visual) */
+.hour-slot.fixed-block {
+  background: rgba(220, 220, 220, 0.45);
+}
+
+/* tasks */
+.task-card {
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  overflow: hidden;
+  cursor: grab;
+}
+.task-card.done {
+  opacity: 0.7;
+  text-decoration: line-through;
+}
+
+/* now line */
+.now-line {
+  box-shadow: 0 0 6px rgba(255,0,0,0.2);
+}
+
