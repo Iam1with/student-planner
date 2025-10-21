@@ -607,3 +607,8 @@ button:hover {
   cursor: pointer;
   font-size: 16px;
 }
+/* quick additions for TimetableGenerator */
+.timetable-container .day-column { min-height: 640px; }
+.task-card { transition: transform .12s ease; }
+.task-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.time-row { color: #666; font-size: 12px; padding-top: 18px; }
